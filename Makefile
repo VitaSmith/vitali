@@ -30,10 +30,6 @@ ${BIN}: ${OBJ}
 	@echo [L] $@
 	@${CC} ${LDFLAGS} -o $@ $^
 
-%_x86.o: %_x86.c
-	@echo [C] $<
-	@${CC} ${CFLAGS} -maes -mssse3 -MMD -c -o $@ $<
-
 %.o: %.c
 	@echo [C] $<
 	@${CC} ${CFLAGS} -MMD -c -o $@ $<

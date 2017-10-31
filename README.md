@@ -6,8 +6,11 @@ by VitaShell 1.76+ to insert licenses when refreshing content from PKG data file
 that don't already contain a `work.bin`.
 
 The utility accepts any kind of file containing zRIFs (`.csv`, `.xml`, `.txt`),
-and, if no other parameters are passe, will create a default `license.db`, which
-you can then copy to `ux0:license/license.db`.
+as long as it contains __uncompressed data__ (this means that `.xlsx` will not
+work, since it's compressed, but the XML content extracted from a `.xlsx` using
+7-zip or any other decompression utility will) and, if no other parameters are
+passed, will create a default `license.db`, which you can then copy to
+`ux0:license/license.db`.
 
 Compilation
 -----------
