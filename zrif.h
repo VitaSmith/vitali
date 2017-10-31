@@ -19,5 +19,4 @@
 #pragma once
 #include <stdint.h>
 
-/* Returned data must be freed by the caller */
-uint8_t* decode_zrif(const char* zrif, uint32_t* len);
+size_t decode_zrif(const char* zrif, uint8_t* dst, const size_t dst_len);

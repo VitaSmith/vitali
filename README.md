@@ -1,26 +1,30 @@
-Gelida - GEnerate LIcense DAtabase, for PS Vita
-===============================================
+Gelida - GEnerate LIcense DAtabase
+==================================
 
-This command line utility can be used to generate/update the `license.db`, used
-by VitaShell 1.76+ to insert licenses when refreshing content from PKG data files
-that don't already contain a `work.bin`.
+A command line utility to generate or update the `license.db` database used by
+[VitaShell](https://github.com/TheOfficialFloW/VitaShell/releases) 1.76+.
 
-The utility accepts any kind of file containing zRIFs (`.csv`, `.xml`, `.txt`),
-as long as it contains __uncompressed data__ (this means that `.xlsx` will not
-work, since it's compressed, but the XML content extracted from a `.xlsx` using
-7-zip or any other decompression utility will) and, if no other parameters are
-passed, will create a default `license.db`, which you can then copy to
-`ux0:license/license.db`.
+The generated database, once copied over to `ux0:license/license.db`, can then
+be used when invoking the _Refresh livearea_ of VitaShell, to install content
+that was extracted from Sony's PKG files, regardless of whether a license was
+provide during PKG extraction (provided, of course, that a corresponding
+license has been imported in the database).
 
 Compilation
 -----------
 
-Either use `build.cmd` if you are on Windows and have Visual Studio 2017 installed,
-or `make` for Linux, Windows/MinGW and other platforms.
+Either use `build.cmd` if you are on Windows and have Visual Studio 2017
+installed, or `make` for Linux, Windows/MinGW and other platforms.
 
 Usage
 -----
 
 `gelida ZRIF_FILE [DB_FILE]`
 
-`DB_FILE` is optional. If not specified, the default `license.db` will be used.
+The utility accepts any kind of __uncompressed__ file containing zRIFs (`.csv`,
+`.xml`, `.txt`, ...) as well as Microsoft's `.xlsx` spreadsheets, which you
+should provide as the first parameter.
+
+Optionally you can also provide a `DB_FILE` parameter, with the name of the
+database file you want to generate. If this parameter is not provide, then the
+default `license.db` name will be used.

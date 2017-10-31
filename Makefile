@@ -16,7 +16,7 @@ SRC=${wildcard *.c}
 OBJ=${SRC:.c=.o}
 DEP=${SRC:.c=.d}
 
-CFLAGS=-pipe -fvisibility=hidden -Wall -Wextra -Wno-implicit-fallthrough -DNDEBUG -O2
+CFLAGS=-pipe -fvisibility=hidden -Wall -Wextra -Wno-strict-aliasing -Wno-implicit-fallthrough -DNDEBUG -D__USE_MINGW_ANSI_STDIO=1 -O2
 LDFLAGS=-s -lpthread ${LIBS}
 
 .PHONY: all clean

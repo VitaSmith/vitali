@@ -1,6 +1,6 @@
 /*
   puff.h
-  Copyright © 2002-2013 Mark Adler, all rights reserved
+  Copyright Â© 2002-2013 Mark Adler, all rights reserved
   version 2.3, 21 Jan 2013
 
   This software is provided 'as-is', without any express or implied
@@ -22,17 +22,20 @@
   Mark Adler    madler@alumni.caltech.edu
 */
 
-/* This header was modified to support custom dictionary */
-
 /*
+ * This header was modified to support custom dictionary
  * See puff.c for purpose and usage.
  */
+
+#include <stdint.h>
+#include <stdlib.h>
+
 #ifndef NIL
 #  define NIL ((unsigned char *)0)      /* for no output option */
 #endif
 
-int puff(uint32_t dictlen,        /* length of custom dictionary */
+int puff(size_t dictlen,          /* length of custom dictionary */
          uint8_t *dest,           /* pointer to destination pointer */
-         uint32_t *destlen,       /* amount of output space */
+         size_t *destlen,         /* amount of output space */
          const uint8_t *source,   /* pointer to source data pointer */
-         uint32_t *sourcelen);    /* amount of input available */
+         size_t *sourcelen);      /* amount of input available */

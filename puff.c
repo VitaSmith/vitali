@@ -25,13 +25,13 @@
 struct state {
     /* output state */
     uint8_t *out;               /* output buffer */
-    uint32_t outlen;            /* available space at out */
-    uint32_t outcnt;            /* bytes written to out so far */
+    size_t outlen;              /* available space at out */
+    size_t outcnt;              /* bytes written to out so far */
 
     /* input state */
     const uint8_t *in;          /* input buffer */
-    uint32_t inlen;             /* available input at in */
-    uint32_t incnt;             /* bytes read so far */
+    size_t inlen;               /* available input at in */
+    size_t incnt;               /* bytes read so far */
     int bitbuf;                 /* bit buffer */
     int bitcnt;                 /* number of bits in bit buffer */
 
@@ -90,7 +90,7 @@ local int bits(struct state *s, int need)
  */
 local int stored(struct state *s)
 {
-    uint32_t len;       /* length of stored block */
+    size_t len;       /* length of stored block */
 
     /* discard leftover bits from current byte (assumes s->bitcnt < 8) */
     s->bitbuf = 0;
@@ -335,7 +335,7 @@ local int codes(struct state *s,
 {
     int symbol;         /* decoded symbol */
     int len;            /* length for copy */
-    uint32_t dist;      /* distance for copy */
+    size_t dist;        /* distance for copy */
     static const uint16_t lens[29] = { /* Size base for length codes 257..285 */
         3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
         35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258 };
@@ -682,11 +682,11 @@ local int dynamic(struct state *s)
  *   block (if it was a fixed or dynamic block) are undefined and have no
  *   expected values to check.
  */
-int puff(uint32_t dictlen,      /* length of custom dictionary */
+int puff(size_t dictlen,        /* length of custom dictionary */
     uint8_t *dest,              /* pointer to destination pointer */
-    uint32_t *destlen,          /* amount of output space */
+    size_t *destlen,            /* amount of output space */
     const uint8_t *source,      /* pointer to source data pointer */
-    uint32_t *sourcelen)        /* amount of input available */
+    size_t *sourcelen)          /* amount of input available */
 {
     struct state s;             /* input/output state */
     int last, type;             /* block information */

@@ -98,7 +98,7 @@ static uint32_t adler32(const uint8_t* data, size_t size)
     return (b << 16) | a;
 }
 
-static uint32_t base64_decode(const char* in, uint8_t* out)
+static size_t base64_decode(const char* in, uint8_t* out)
 {
     const uint8_t* out0 = out;
     const uint8_t* in8 = (uint8_t*)in;
@@ -126,10 +126,10 @@ static uint32_t base64_decode(const char* in, uint8_t* out)
         *out++ = b64d[in8[2]] << 6;
     }
 
-    return (uint32_t)(out - out0);
+    return (size_t)(out - out0);
 }
 
-static uint32_t zlib_inflate(const uint8_t* in, uint32_t inlen, uint8_t* out, uint32_t outlen)
+static size_t zlib_inflate(const uint8_t* in, size_t inlen, uint8_t* out, size_t outlen)
 {
     if (inlen < 2 + 4)
         return 0;
@@ -140,9 +140,9 @@ static uint32_t zlib_inflate(const uint8_t* in, uint32_t inlen, uint8_t* out, ui
     if ((in[0] & 0xf) != ZLIB_DEFLATE_METHOD)
         return 0;
 
-    uint32_t slen = inlen - 4;
-    uint32_t dlen = outlen;
-    uint32_t dictlen = 0;
+    size_t slen = inlen - 4;
+    size_t dlen = outlen;
+    size_t dictlen = 0;
 
     if (in[1] & (1 << 5)) {
         assert(outlen > sizeof(zrif_dict));
@@ -168,21 +168,21 @@ static uint32_t zlib_inflate(const uint8_t* in, uint32_t inlen, uint8_t* out, ui
     return dlen;
 }
 
-uint8_t* decode_zrif(const char* zrif, uint32_t* len)
+size_t decode_zrif(const char* zrif, uint8_t* dst, const size_t dst_len)
 {
     /* PSM RIFs are twice the base RIF size */
     uint8_t raw[2 * BASE_RIF_SIZE];
     uint8_t out[2 * BASE_RIF_SIZE + sizeof(zrif_dict)];
+    size_t rif_len = 0;
 
-    *len = base64_decode(zrif, raw);
-    *len = zlib_inflate(raw, *len, out, sizeof(out));
-    if ((*len != BASE_RIF_SIZE) && (*len != 2 * BASE_RIF_SIZE)) {
-        *len = 0;
-        return NULL;
-    }
+    if (dst_len < 2 * BASE_RIF_SIZE)
+        return 0;
 
-    uint8_t* rif = malloc(*len);
-    if (rif != NULL)
-        memcpy(rif, out, *len);
-    return rif;
+    rif_len = base64_decode(zrif, raw);
+    rif_len = zlib_inflate(raw, rif_len, out, sizeof(out));
+    if ((rif_len != BASE_RIF_SIZE) && (rif_len != 2 * BASE_RIF_SIZE))
+        return 0;
+
+    memcpy(dst, out, rif_len);
+    return rif_len;
 }
