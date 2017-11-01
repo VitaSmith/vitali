@@ -21,7 +21,7 @@
   <PropertyGroup Label="Globals">
     <ProjectGuid>{2267C6E1-BCA1-4F9F-8FCA-1CE64FF90743}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
-    <RootNamespace>gelida</RootNamespace>
+    <RootNamespace>vitali</RootNamespace>
     <WindowsTargetPlatformVersion>8.1</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -111,7 +111,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="gelida.c" />
+    <ClCompile Include="vitali.c" />
     <ClCompile Include="puff.c" />
     <ClCompile Include="sqlite3.c" />
     <ClCompile Include="zrif.c" />

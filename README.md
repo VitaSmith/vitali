@@ -1,5 +1,5 @@
-Gelida - GEnerate LIcense DAtabase
-==================================
+Vitali - Vita License database updater
+======================================
 
 A command line utility to generate or update the `license.db` database used by
 [VitaShell](https://github.com/TheOfficialFloW/VitaShell/releases) 1.76+.
@@ -13,18 +13,25 @@ license has been imported in the database).
 Compilation
 -----------
 
-Either use `build.cmd` if you are on Windows and have Visual Studio 2017
-installed, or `make` for Linux, Windows/MinGW and other platforms.
+Either use `build.cmd` or the `.sln` file if you are on Windows and have
+Visual Studio 2017 installed, or `make` on Linux, Windows/MinGW and other
+platforms.
 
 Usage
 -----
 
-`gelida ZRIF_FILE [DB_FILE]`
+`vitali [ZRIF_URI] [DB_FILE]`
 
-The utility accepts any kind of __uncompressed__ file containing zRIFs (`.csv`,
-`.xml`, `.txt`, ...) as well as Microsoft's `.xlsx` spreadsheets, which you
-should provide as the first parameter.
+If no parameter is provided, Vitali tries to download the latest zRIF data
+from the internet, and create/update a `license.db` file in the current
+directory.
 
-Optionally you can also provide a `DB_FILE` parameter, with the name of the
-database file you want to generate. If this parameter is not provide, then the
-default `license.db` name will be used.
+If a single parameter is provided, Vitali uses it as the source of the zRIF
+data. It can be either a local file or a URL.
+
+If a second parameter is provided, it will be used as the name of the
+database to process instead of the default `license.db`.
+
+The application is designed to accept any kind of __uncompressed__ file
+containing zRIFs (`.csv`, `.xml`, `.txt`, ...) as well as Microsoft's
+`.xlsx` spreadsheets.

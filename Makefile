@@ -11,7 +11,7 @@ else
   LIBS := -ldl
 endif
 
-BIN=gelida${EXE}
+BIN=vitali${EXE}
 SRC=${wildcard *.c}
 OBJ=${SRC:.c=.o}
 DEP=${SRC:.c=.d}

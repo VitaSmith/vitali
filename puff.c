@@ -100,7 +100,7 @@ local int stored(struct state *s)
     if (s->incnt + 4 > s->inlen)
         return 2;                               /* not enough input */
     len = s->in[s->incnt++];
-    len |= s->in[s->incnt++] << 8;
+    len |= ((size_t)s->in[s->incnt++]) << 8;
     if (s->in[s->incnt++] != (~len & 0xff) ||
         s->in[s->incnt++] != ((~len >> 8) & 0xff))
         return -2;                              /* didn't match complement! */

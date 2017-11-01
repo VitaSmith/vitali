@@ -1,5 +1,5 @@
 /*
-  Gelida - GEnerate LIcense DAtabase for PS Vita
+  Vitali - Vita License database updater
   Copyright © 2017 - VitaSmith
 
   This program is free software: you can redistribute it and/or modify
@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <inttypes.h>
 #include <string.h>
 
@@ -26,10 +27,48 @@
 #include "zrif.h"
 #include "puff.h"
 
-#define VERSION "1.1"
+#if defined(_WIN32) || defined(__CYGWIN__)
+#include <windows.h>
+#define USE_VBSCRIPT_DOWNLOAD 1
+#else
+#define USE_VBSCRIPT_DOWNLOAD 0
+#endif
+
+#define VERSION "1.2"
 #define MAX_QUERY_LENGTH 128
+#define ZRIF_URI "https://docs.google.com/spreadsheets/d/18PTwQP7mlwZH1smpycHsxbEwpJnT8IwFP7YZWQT7ZSs/export?format=xlsx"
 
 static const char* zrif_charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/+=";
+static int use_vbscript_download = USE_VBSCRIPT_DOWNLOAD;
+static const char vbs[] = \
+    "Set xHttp = createobject(\"Microsoft.XMLHTTP\")\n" \
+    "Set bStrm = createobject(\"Adodb.Stream\")\n" \
+    "Call xHttp.Open(\"GET\", WScript.Arguments(0), False)\n" \
+    "Call xHttp.SetRequestHeader(\"If-None-Match\", \"some-random-string\")\n" \
+    "Call xHttp.SetRequestHeader(\"Cache-Control\", \"no-cache,max-age=0\")\n" \
+    "Call xHttp.SetRequestHeader(\"Pragma\", \"no-cache\")\n" \
+    "Call xHttp.Send()\n" \
+    "If Not xHttp.Status = 200 Then\n" \
+    "  Call WScript.Quit(xHttp.Status)\n" \
+    "End If\n" \
+    "With bStrm\n" \
+    "  .type = 1\n" \
+    "  .open\n" \
+    "  .write xHttp.responseBody\n" \
+    "  .savetofile WScript.Arguments(1), 2\n" \
+    "End With\n";
+
+static bool separate_console()
+{
+#if defined(_WIN32) || defined(__CYGWIN__)
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (!GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi))
+        return 0;
+    return ((!csbi.dwCursorPosition.X) && (!csbi.dwCursorPosition.Y));
+#else
+    return false;
+#endif
+}
 
 static int create_db(const char* db_path)
 {
@@ -53,7 +92,7 @@ out:
     return rc;
 }
 
-char* unzip_xlsx(const char* in_buf, size_t in_size, size_t* out_size)
+static char* unzip_xlsx(const char* in_buf, size_t in_size, size_t* out_size)
 {
     const char* shared_strings = "xl/sharedStrings.xml";
     size_t shared_strings_len = strlen(shared_strings);
@@ -114,7 +153,11 @@ out:
 int main(int argc, char** argv)
 {
     int ret = 1, rc, processed = 0, added = 0, duplicate = 0, failed = 0;
+    bool created_db = false, needs_keypress = separate_console();
     char *db_path = "license.db";
+    char *zrif_tmp = "zrif.tmp";
+    char *vbs_tmp = "download.vbs";
+    char *zrif_uri = ZRIF_URI;
     char *content_id, *errmsg = NULL;
     char *buf = NULL, *zrif = NULL;
     char query[MAX_QUERY_LENGTH];
@@ -124,31 +167,57 @@ int main(int argc, char** argv)
     sqlite3 *db = NULL;
     sqlite3_stmt *stmt;
 
-    if (argc < 2) {
-        fprintf(stderr, "Usage: gelida ZRIF_FILE [DB_FILE]\n");
-        goto out;
+    for (int i = 1; i < argc; i++) {
+        if ((strcmp(argv[i], "-v") == 0) || (strcmp(argv[i], "--version") == 0)) {
+            printf("Vitali - Vita License database updater, v" VERSION "\n");
+            printf("Copyright(c) 2017 - VitaSmith\n");
+            printf("Visit https://github.com/VitaSmith/vitali for license details and source\n");
+            goto out;
+        }
+        if ((strcmp(argv[i], "-h") == 0) || (strcmp(argv[i], "--help") == 0)) {
+            printf("Usage: vitali [ZRIF_URI] [DB_FILE]\n");
+            goto out;
+        }
+        if (i == 1)
+            zrif_uri = argv[i];
+        else if (i == 2)
+            db_path = argv[i];
     }
 
-    if ((strcmp(argv[1], "-v") == 0) || (strcmp(argv[1], "--version") == 0)) {
-        printf("gelida v" VERSION "\n");
-        printf("Copyright(c) 2017 - VitaSmith\n");
-        printf("Visit https://github.com/VitaSmith/gelida for license details and source\n");
-        goto out;
+    if (strncmp(zrif_uri, "http", 4) == 0) {
+        char cmd[1024];
+        if (use_vbscript_download) {
+            FILE *vbs_fd = fopen(vbs_tmp, "w");
+            if (vbs_fd != NULL) {
+                fwrite(vbs, 1, sizeof(vbs) - 1, vbs_fd);
+                fclose(vbs_fd);
+            }
+        }
+        printf("Downloading '%s'...\n", zrif_uri);
+        fflush(stdout);
+        if (use_vbscript_download)
+            snprintf(cmd, sizeof(cmd), "cscript //nologo %s %s %s", vbs_tmp, zrif_uri, zrif_tmp);
+        else
+            snprintf(cmd, sizeof(cmd), "curl %s -o %s || wget %s -O %s || exit 400",
+                zrif_uri, zrif_tmp, zrif_uri, zrif_tmp);
+        int sys_ret = system(cmd);
+        if (sys_ret != 0) {
+            printf("Cannot download file - Error %d\n", sys_ret);
+            goto out;
+        }
+        zrif_uri = zrif_tmp;
     }
 
-    if (argc > 2)
-        db_path = argv[2];
-
-    fd = fopen(argv[1], "rb");
+    fd = fopen(zrif_uri, "rb");
     if (fd == NULL) {
-        fprintf(stderr, "Cannot open file '%s'\n", argv[2]);
+        fprintf(stderr, "Cannot open file '%s'\n", zrif_uri);
         goto out;
     }
 
     fseek(fd, 0L, SEEK_END);
     size_t size = (size_t) ftell(fd);
     if (size < 16) {
-        fprintf(stderr, "Size of '%s' is too small\n", argv[2]);
+        fprintf(stderr, "Size of '%s' is too small\n", zrif_uri);
         goto out;
     }
 
@@ -161,7 +230,7 @@ int main(int argc, char** argv)
     }
     size_t read = fread(buf, 1, size, fd);
     if (read != size) {
-        fprintf(stderr, "Cannot read from '%s'\n", argv[2]);
+        fprintf(stderr, "Cannot read from '%s'\n", zrif_uri);
         goto out;
     }
     buf[size] = 0;
@@ -181,9 +250,12 @@ int main(int argc, char** argv)
     if (fd != NULL) {
         fclose(fd);
         fd = NULL;
-    } else if (create_db(db_path) != SQLITE_OK) {
-        fprintf(stderr, "Could not create database '%s'\n", db_path);
-        goto out;
+    } else {
+        created_db = 1;
+        if (create_db(db_path) != SQLITE_OK) {
+            fprintf(stderr, "Could not create database '%s'\n", db_path);
+            goto out;
+        }
     }
 
     rc = sqlite3_open_v2(db_path, &db, SQLITE_OPEN_READWRITE, NULL);
@@ -237,15 +309,24 @@ int main(int argc, char** argv)
         goto out;
     }
 
-    printf("Processed %d license(s): %d added, %d duplicate(s), %d failed\n", processed, added, duplicate, failed);
+    printf("\nProcessed %d license(s): %d added, %d duplicate(s), %d failed.\n", processed, added, duplicate, failed);
+    printf("Database '%s' was successfully %s.\n", db_path, created_db ? "created" : "updated");
     ret = 0;
 
 out:
+    remove(zrif_tmp);
+    remove(vbs_tmp);
     if (errmsg != NULL)
         sqlite3_free(errmsg);
     sqlite3_close(db);
     free(buf);
     if (fd != NULL)
         fclose(fd);
+    if (needs_keypress) {
+        printf("\nPress any key to exit...\n");
+        fflush(stdout);
+        getchar();
+    }
+
     return ret;
 }
