@@ -1,7 +1,11 @@
 *.bin
-*.zip
+*.d
+*.db
 *.o
 *.obj
-*.db
+*.zip
+.vs
+Win32
+Win64
 gelida
 gelida.exe
