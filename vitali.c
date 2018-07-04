@@ -29,17 +29,16 @@
 
 #if defined(_WIN32) || defined(__CYGWIN__)
 #include <windows.h>
-#define USE_VBSCRIPT_DOWNLOAD 1
+#define USE_VBSCRIPT_DOWNLOAD true
 #else
-#define USE_VBSCRIPT_DOWNLOAD 0
+#define USE_VBSCRIPT_DOWNLOAD false
 #endif
 
 #define VERSION "1.2"
 #define MAX_QUERY_LENGTH 128
-#define ZRIF_URI "https://docs.google.com/spreadsheets/d/18PTwQP7mlwZH1smpycHsxbEwpJnT8IwFP7YZWQT7ZSs/export?format=xlsx"
+#define ZRIF_URI "https://docs.google.com/spreadsheets/d/1HfI8elhzJW9XP9_A6KLx6AZpwP9vvWTal6i7NVwVWzs/export?format=xlsx"
 
 static const char* zrif_charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/+=";
-static int use_vbscript_download = USE_VBSCRIPT_DOWNLOAD;
 static const char vbs[] = \
     "Set xHttp = createobject(\"Microsoft.XMLHTTP\")\n" \
     "Set bStrm = createobject(\"Adodb.Stream\")\n" \
@@ -154,6 +153,7 @@ int main(int argc, char** argv)
 {
     int ret = 1, rc, processed = 0, added = 0, duplicate = 0, failed = 0;
     bool created_db = false, needs_keypress = separate_console();
+    bool use_vbscript_download = USE_VBSCRIPT_DOWNLOAD;
     char *db_path = "license.db";
     char *zrif_tmp = "zrif.tmp";
     char *vbs_tmp = "download.vbs";
@@ -170,7 +170,7 @@ int main(int argc, char** argv)
     for (int i = 1; i < argc; i++) {
         if ((strcmp(argv[i], "-v") == 0) || (strcmp(argv[i], "--version") == 0)) {
             printf("Vitali - Vita License database updater, v" VERSION "\n");
-            printf("Copyright(c) 2017 - VitaSmith\n");
+            printf("Copyright(c) 2017-2018 - VitaSmith\n");
             printf("Visit https://github.com/VitaSmith/vitali for license details and source\n");
             goto out;
         }
@@ -253,19 +253,19 @@ int main(int argc, char** argv)
     } else {
         created_db = 1;
         if (create_db(db_path) != SQLITE_OK) {
-            fprintf(stderr, "Could not create database '%s'\n", db_path);
+            fprintf(stderr, "Cannot create database '%s'\n", db_path);
             goto out;
         }
     }
 
     rc = sqlite3_open_v2(db_path, &db, SQLITE_OPEN_READWRITE, NULL);
     if (fd != SQLITE_OK) {
-        fprintf(stderr, "Could not open database '%s'\n", db_path);
+        fprintf(stderr, "Cannot open database '%s'\n", db_path);
         goto out;
     }
     rc = sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "Could create transaction: %s\n", errmsg);
+        fprintf(stderr, "Cannot create transaction: %s\n", errmsg);
         goto out;
     }
 
@@ -290,14 +290,14 @@ int main(int argc, char** argv)
                 if (rc == SQLITE_CONSTRAINT) {
                     duplicate++;
                 } else {
-                    fprintf(stderr, "Could not add %s from zRIF %s: %s\n", content_id, zrif, sqlite3_errmsg(db));
+                    fprintf(stderr, "Cannot add %s from zRIF %s: %s\n", content_id, zrif, sqlite3_errmsg(db));
                     failed++;
                 }
             } else {
                 added++;
             }
         } else {
-            fprintf(stderr, "Could not decode zRIF: %s\n", zrif);
+            fprintf(stderr, "Cannot decode zRIF: %s\n", zrif);
             failed++;
         }
         zrif += zrif_len + 1;
@@ -305,7 +305,7 @@ int main(int argc, char** argv)
 
     rc = sqlite3_exec(db, "COMMIT", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "Could commit transaction: %s\n", errmsg);
+        fprintf(stderr, "Cannot commit transaction: %s\n", errmsg);
         goto out;
     }
 
