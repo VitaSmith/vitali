@@ -12,7 +12,7 @@ else
 endif
 
 BIN=vitali${EXE}
-SRC=${wildcard *.c}
+SRC=puff.c sqlite3.c zrif.c vitali.c
 OBJ=${SRC:.c=.o}
 DEP=${SRC:.c=.d}
 

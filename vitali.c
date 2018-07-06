@@ -22,6 +22,8 @@
 #include <stdbool.h>
 #include <inttypes.h>
 #include <string.h>
+#include <io.h>
+#include <fcntl.h>
 
 #include "sqlite3.h"
 #include "zrif.h"
@@ -91,11 +93,10 @@ out:
     return rc;
 }
 
-static char* unzip_xlsx(const char* in_buf, size_t in_size, size_t* out_size)
+static char* unzip_xlsx(const char* in_buf, long in_size, long* out_size)
 {
     const char* shared_strings = "xl/sharedStrings.xml";
     size_t shared_strings_len = strlen(shared_strings);
-    FILE *fd = NULL;
     char *pos, *out_buf = NULL;
     size_t compressed_size = 0, uncompressed_size = 0;
 
@@ -143,9 +144,7 @@ static char* unzip_xlsx(const char* in_buf, size_t in_size, size_t* out_size)
     }
 
 out:
-    if (fd != NULL)
-        fclose(fd);
-    *out_size = (out_buf == NULL) ? 0 : uncompressed_size;
+    *out_size = (long)((out_buf == NULL) ? 0 : uncompressed_size);
     return out_buf;
 }
 
@@ -163,7 +162,7 @@ int main(int argc, char** argv)
     char query[MAX_QUERY_LENGTH];
     uint8_t rif[1024];
     size_t rif_len, zrif_len;
-    FILE *fd = NULL;
+    int fd = 0;
     sqlite3 *db = NULL;
     sqlite3_stmt *stmt;
 
@@ -209,29 +208,29 @@ redirect:
         zrif_uri = zrif_tmp;
     }
 
-    fd = fopen(zrif_uri, "rb");
-    if (fd == NULL) {
+    fd = _open(zrif_uri, _O_RDONLY | _O_BINARY);
+    if (fd <= 0) {
         fprintf(stderr, "Cannot open file '%s'\n", zrif_uri);
         goto out;
     }
 
-    fseek(fd, 0L, SEEK_END);
-    size_t size = (size_t) ftell(fd);
+    long size = _lseek(fd, 0, SEEK_END);
     if (size < 16) {
         fprintf(stderr, "Size of '%s' is too small\n", zrif_uri);
         goto out;
     }
 
-    fseek(fd, 0L, SEEK_SET);
+    _lseek(fd, 0, SEEK_SET);
 
     free(buf);
-    buf = malloc(size + 2);
+    // Allow some extra space in case the redirect URL is at the very end of our buffer
+    buf = malloc(size + 16);
     if (buf == NULL) {
         fprintf(stderr, "Cannot allocate buffer\n");
         goto out;
     }
-    size_t read = fread(buf, 1, size, fd);
-    if (read != size) {
+    int rsize = _read(fd, buf, size);
+    if (rsize != size) {
         fprintf(stderr, "Cannot read from '%s'\n", zrif_uri);
         goto out;
     }
@@ -252,18 +251,19 @@ redirect:
             p = strstr(p, "/edit'");
         }
         if (p != NULL) {
-            fclose(fd);
+            _close(fd);
             remove(zrif_tmp);
             strcpy(p, "/export?format=xlsx");
             goto redirect;
         }
     }
 
-    fclose(fd);
-    fd = fopen(db_path, "rb");
-    if (fd != NULL) {
-        fclose(fd);
-        fd = NULL;
+    printf("Download complete.\n");
+    _close(fd);
+    fd = _open(db_path, _O_RDONLY | _O_BINARY);
+    if (fd > 0) {
+        _close(fd);
+        fd = 0;
     } else {
         created_db = 1;
         if (create_db(db_path) != SQLITE_OK) {
@@ -334,8 +334,8 @@ out:
         sqlite3_free(errmsg);
     sqlite3_close(db);
     free(buf);
-    if (fd != NULL)
-        fclose(fd);
+    if (fd > 0)
+        _close(fd);
     if (needs_keypress) {
         printf("\nPress any key to exit...\n");
         fflush(stdout);

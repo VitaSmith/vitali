@@ -10,6 +10,6 @@ set CL=%CL% /Ox
 rem set CL=%CL% /Od /Zi
 rem set LINK=%LINK% /DEBUG
 
-cl.exe *.c /Fe%APP_NAME%
-if %ERRORLEVEL% equ 0 echo Successfully created '%APP_NAME%'
+cl.exe puff.c sqlite3.c zrif.c vitali.c /Fe%APP_NAME%
+if %ERRORLEVEL% equ 0 echo =^> %APP_NAME%
 pause
