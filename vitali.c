@@ -36,7 +36,7 @@
 
 #define VERSION "1.2"
 #define MAX_QUERY_LENGTH 128
-#define ZRIF_URI "https://docs.google.com/spreadsheets/d/1HfI8elhzJW9XP9_A6KLx6AZpwP9vvWTal6i7NVwVWzs/export?format=xlsx"
+#define ZRIF_URI "https://nopaystation.com/database"
 
 static const char* zrif_charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/+=";
 static const char vbs[] = \
@@ -184,6 +184,7 @@ int main(int argc, char** argv)
             db_path = argv[i];
     }
 
+redirect:
     if (strncmp(zrif_uri, "http", 4) == 0) {
         char cmd[1024];
         if (use_vbscript_download) {
@@ -223,6 +224,7 @@ int main(int argc, char** argv)
 
     fseek(fd, 0L, SEEK_SET);
 
+    free(buf);
     buf = malloc(size + 2);
     if (buf == NULL) {
         fprintf(stderr, "Cannot allocate buffer\n");
@@ -243,6 +245,18 @@ int main(int argc, char** argv)
             goto out;
         free(buf);
         buf = new_buf;
+    } else {
+        char* p = strstr(buf, "https://docs.google.com/spreadsheets");
+        if (p != NULL) {
+            zrif_uri = p;
+            p = strstr(p, "/edit'");
+        }
+        if (p != NULL) {
+            fclose(fd);
+            remove(zrif_tmp);
+            strcpy(p, "/export?format=xlsx");
+            goto redirect;
+        }
     }
 
     fclose(fd);
