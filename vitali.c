@@ -1,6 +1,6 @@
 /*
   Vitali - Vita License database updater
-  Copyright © 2017 - VitaSmith
+  Copyright © 2017-2018 - VitaSmith
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -22,25 +22,73 @@
 #include <stdbool.h>
 #include <inttypes.h>
 #include <string.h>
-#include <io.h>
+#if !defined(__vita__)
 #include <fcntl.h>
+#include <io.h>
+#if defined(_WIN32) || defined(__CYGWIN__)
+#include <windows.h>
+#endif
+#else
+#include <psp2/ctrl.h>
+#include <psp2/sqlite.h>
+#include <psp2/display.h>
+#include <psp2/apputil.h>
+#include <psp2/sysmodule.h>
+#include <psp2/kernel/processmgr.h>
+#include <psp2/io/fcntl.h>
+#include <psp2/net/net.h>
+#include <psp2/net/netctl.h>
+#include <psp2/net/http.h>
+#include "console.h"
+#endif
 
 #include "sqlite3.h"
 #include "zrif.h"
 #include "puff.h"
 
+#define VERSION "1.3"
+#define MAX_QUERY_LENGTH 128
+#if defined(__vita__)
+#define ZRIF_URI "ux0:data/sharedStrings.xml"
+#else
+#define ZRIF_URI "https://nopaystation.com/database"
+#endif
+
+#if defined(__vita__)
+#define ZRIF_TMP_PATH       "ux0:data/zrif.tmp"
+#define LICENSE_DB_PATH     "ux0:data/license.db"
+#undef  SEEK_SET
+#undef  SEEK_CUR
+#undef  SEEK_END
+#define SEEK_SET            SCE_SEEK_SET
+#define SEEK_CUR            SCE_SEEK_CUR
+#define SEEK_END            SCE_SEEK_END
+#define _open(path, flags)  sceIoOpen(path, flags, 0777)
+#define _lseek              sceIoLseek
+#define _read               sceIoRead
+#define _close              sceIoClose
+#define _O_RDONLY           SCE_O_RDONLY
+#define _O_BINARY           0
+#define perr(...)           printf(__VA_ARGS__)
+#else
+#define ZRIF_TMP_PATH       "zrif.tmp"
+#define LICENSE_DB_PATH     "license.db"
+#define perr(...)           fprintf(stderr, __VA_ARGS__)
 #if defined(_WIN32) || defined(__CYGWIN__)
-#include <windows.h>
 #define USE_VBSCRIPT_DOWNLOAD true
 #else
 #define USE_VBSCRIPT_DOWNLOAD false
 #endif
-
-#define VERSION "1.2"
-#define MAX_QUERY_LENGTH 128
-#define ZRIF_URI "https://nopaystation.com/database"
+#endif
 
 static const char* zrif_charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/+=";
+static const char* schema =             \
+    "CREATE TABLE Licenses ("           \
+    "CONTENT_ID TEXT NOT NULL UNIQUE,"  \
+    "RIF BLOB NOT NULL,"                \
+    "PRIMARY KEY(CONTENT_ID)"           \
+    ")";
+#if !defined(__vita__)
 static const char vbs[] = \
     "Set xHttp = createobject(\"Microsoft.XMLHTTP\")\n" \
     "Set bStrm = createobject(\"Adodb.Stream\")\n" \
@@ -58,6 +106,7 @@ static const char vbs[] = \
     "  .write xHttp.responseBody\n" \
     "  .savetofile WScript.Arguments(1), 2\n" \
     "End With\n";
+#endif
 
 static bool separate_console()
 {
@@ -66,31 +115,11 @@ static bool separate_console()
     if (!GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi))
         return 0;
     return ((!csbi.dwCursorPosition.X) && (!csbi.dwCursorPosition.Y));
+#elif defined(__vita__)
+    return true;
 #else
     return false;
 #endif
-}
-
-static int create_db(const char* db_path)
-{
-    int rc;
-    sqlite3 *db = NULL;
-    const char* schema = "CREATE TABLE Licenses (" \
-        "CONTENT_ID TEXT NOT NULL UNIQUE," \
-        "RIF BLOB NOT NULL," \
-        "PRIMARY KEY(CONTENT_ID)" \
-        ")";
-
-    rc = sqlite3_open_v2(db_path, &db, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE, NULL);
-    if (rc != SQLITE_OK)
-        goto out;
-    rc = sqlite3_exec(db, schema, NULL, NULL, NULL);
-    if (rc != SQLITE_OK)
-        goto out;
-
-out:
-    sqlite3_close(db);
-    return rc;
 }
 
 static char* unzip_xlsx(const char* in_buf, long in_size, long* out_size)
@@ -117,7 +146,7 @@ static char* unzip_xlsx(const char* in_buf, long in_size, long* out_size)
         break;
     }
     if (compressed_size == 0) {
-        fprintf(stderr, "Could not find '%s' in XLSX file\n", shared_strings);
+        perr("Could not find '%s' in XLSX file\n", shared_strings);
         goto out;
     }
 
@@ -135,11 +164,11 @@ static char* unzip_xlsx(const char* in_buf, long in_size, long* out_size)
         pos += 0x1e + shared_strings_len;
         out_buf = malloc(uncompressed_size);
         if (out_buf == NULL) {
-            fprintf(stderr, "Could not allocate xlsx decompression buffer\n");
+            perr("Could not allocate xlsx decompression buffer\n");
             goto out;
         }
         if (puff(0, (uint8_t*)out_buf, &uncompressed_size, (uint8_t*)pos, &compressed_size) != 0)
-            fprintf(stderr, "Could not decompress '%s' in XLSX file\n", shared_strings);
+            perr("Could not decompress '%s' in XLSX file\n", shared_strings);
         goto out;
     }
 
@@ -148,23 +177,152 @@ out:
     return out_buf;
 }
 
+#if defined(__vita__)
+void http_init()
+{
+    const int size = 1 * 1024 * 1024;
+    sceSysmoduleLoadModule(SCE_SYSMODULE_NET);
+    SceNetInitParam netInitParam;
+    netInitParam.memory = malloc(size);
+    netInitParam.size = size;
+    netInitParam.flags = 0;
+    sceNetInit(&netInitParam);
+    sceNetCtlInit();
+    sceSysmoduleLoadModule(SCE_SYSMODULE_HTTP);
+    sceHttpInit(size);
+}
+
+void http_exit()
+{
+    sceHttpTerm();
+    sceSysmoduleUnloadModule(SCE_SYSMODULE_HTTP);
+    sceNetCtlTerm();
+    sceNetTerm();
+    sceSysmoduleUnloadModule(SCE_SYSMODULE_NET);
+}
+
+static bool download_file(const char *url, const char *dest)
+{
+    bool ret = false;
+    unsigned char buffer[16 * 1024];
+    int template = 0, connection = 0, request = 0, handle = 0, fd = 0, read, written;
+
+    printf("Downloading '%s'...\n", url);
+    http_init();
+
+    printf("sceHttpCreateTemplate()...\n");
+    template = sceHttpCreateTemplate("PS Vita Vitali App", 1, 1);
+    if (template < 0) {
+        perr("sceHttpCreateTemplate() error: 0x%08X\n", (uint32_t)template);
+        goto out;
+    }
+
+    printf("sceHttpCreateConnectionWithURL()...\n");
+    connection = sceHttpCreateConnectionWithURL(template, url, 0);
+    if (connection < 0) {
+        perr("sceHttpCreateConnectionWithURL() error: 0x%08X\n", (uint32_t)connection);
+        goto out;
+    }
+
+    printf("sceHttpCreateRequestWithURL()...\n");
+    request = sceHttpCreateRequestWithURL(connection, SCE_HTTP_METHOD_GET, url, 0);
+    if (request < 0) {
+        perr("sceHttpCreateRequestWithURL() error: 0x%08X\n", (uint32_t)request);
+        goto out;
+    }
+
+    printf("sceHttpSendRequest()...\n");
+    handle = sceHttpSendRequest(request, NULL, 0);
+    if (handle < 0) {
+        perr("sceHttpSendRequest() error: 0x%08X\n", (uint32_t)handle);
+        goto out;
+    }
+
+    fd = sceIoOpen(dest, SCE_O_WRONLY | SCE_O_CREAT, 0777);
+    if (fd < 0) {
+        perr("Could not open file '%s'\n", dest);
+        goto out;
+    }
+
+    printf("sceHttpReadData()...\n");
+    while ((read = sceHttpReadData(request, &buffer, sizeof(buffer))) > 0) {
+        written = sceIoWrite(fd, buffer, read);
+        if (written <= 0) {
+            perr("Error writing file: 0x%08X\n", (uint32_t)written);
+            goto out;
+        }
+    }
+    if (read < 0) {
+        perr("Error downloading file: 0x%08X\n", (uint32_t)read);
+        goto out;
+    }
+    ret = true;
+
+out:
+    if (request > 0)
+        sceHttpDeleteRequest(request);
+    if (connection > 0)
+        sceHttpDeleteConnection(connection);
+    if (template > 0)
+        sceHttpDeleteTemplate(template);
+    if (fd >0)
+        sceIoClose(fd);
+    http_exit();
+    return ret;
+}
+#else
+static bool download_file(const char* url, const char* file)
+{
+    bool use_vbscript = USE_VBSCRIPT_DOWNLOAD;
+    char *vbs_tmp = "download.vbs";
+    char cmd[1024];
+    if (use_vbscript) {
+        FILE *vbs_fd = fopen(vbs_tmp, "w");
+        if (vbs_fd != NULL) {
+            fwrite(vbs, 1, sizeof(vbs) - 1, vbs_fd);
+            fclose(vbs_fd);
+        }
+    }
+    printf("Downloading '%s'...\n", url);
+    fflush(stdout);
+    if (use_vbscript)
+        snprintf(cmd, sizeof(cmd), "cscript //nologo %s %s %s", vbs_tmp, url, file);
+    else
+        snprintf(cmd, sizeof(cmd), "curl %s -o %s || wget %s -O %s || exit 400",
+            url, file, url, file);
+    int sys_ret = system(cmd);
+    if (sys_ret != 0)
+        printf("Cannot download file - Error %d\n", sys_ret);
+    if (use_vbscript)
+        remove(vbs_tmp);
+    return (sys_ret == 0);
+}
+#endif
+
 int main(int argc, char** argv)
 {
     int ret = 1, rc, processed = 0, added = 0, duplicate = 0, failed = 0;
-    bool created_db = false, needs_keypress = separate_console();
-    bool use_vbscript_download = USE_VBSCRIPT_DOWNLOAD;
-    char *db_path = "license.db";
-    char *zrif_tmp = "zrif.tmp";
-    char *vbs_tmp = "download.vbs";
+    int fd = 0, rsize;
+    long size;
+    bool is_url, initialize_db = false, needs_keypress = separate_console();
+    char *db_path = LICENSE_DB_PATH;
+    char *zrif_tmp = ZRIF_TMP_PATH;
     char *zrif_uri = ZRIF_URI;
     char *content_id, *errmsg = NULL;
     char *buf = NULL, *zrif = NULL;
     char query[MAX_QUERY_LENGTH];
     uint8_t rif[1024];
     size_t rif_len, zrif_len;
-    int fd = 0;
     sqlite3 *db = NULL;
     sqlite3_stmt *stmt;
+
+#if defined(__vita__)
+    SceCtrlData pad;
+    init_video();
+    console_init();
+    sceSysmoduleLoadModule(SCE_SYSMODULE_SQLITE);
+    sqlite3_rw_init();
+#endif
 
     for (int i = 1; i < argc; i++) {
         if ((strcmp(argv[i], "-v") == 0) || (strcmp(argv[i], "--version") == 0)) {
@@ -184,39 +342,23 @@ int main(int argc, char** argv)
     }
 
 redirect:
-    if (strncmp(zrif_uri, "http", 4) == 0) {
-        char cmd[1024];
-        if (use_vbscript_download) {
-            FILE *vbs_fd = fopen(vbs_tmp, "w");
-            if (vbs_fd != NULL) {
-                fwrite(vbs, 1, sizeof(vbs) - 1, vbs_fd);
-                fclose(vbs_fd);
-            }
-        }
-        printf("Downloading '%s'...\n", zrif_uri);
-        fflush(stdout);
-        if (use_vbscript_download)
-            snprintf(cmd, sizeof(cmd), "cscript //nologo %s %s %s", vbs_tmp, zrif_uri, zrif_tmp);
+    is_url = (strncmp(zrif_uri, "http", 4) == 0);
+    if (is_url) {
+        if (download_file(zrif_uri, zrif_tmp))
+            zrif_uri = zrif_tmp;
         else
-            snprintf(cmd, sizeof(cmd), "curl %s -o %s || wget %s -O %s || exit 400",
-                zrif_uri, zrif_tmp, zrif_uri, zrif_tmp);
-        int sys_ret = system(cmd);
-        if (sys_ret != 0) {
-            printf("Cannot download file - Error %d\n", sys_ret);
             goto out;
-        }
-        zrif_uri = zrif_tmp;
     }
 
     fd = _open(zrif_uri, _O_RDONLY | _O_BINARY);
     if (fd <= 0) {
-        fprintf(stderr, "Cannot open file '%s'\n", zrif_uri);
+        perr("Cannot open file '%s'\n", zrif_uri);
         goto out;
     }
 
-    long size = _lseek(fd, 0, SEEK_END);
+    size = _lseek(fd, 0, SEEK_END);
     if (size < 16) {
-        fprintf(stderr, "Size of '%s' is too small\n", zrif_uri);
+        perr("Size of '%s' is too small\n", zrif_uri);
         goto out;
     }
 
@@ -226,12 +368,12 @@ redirect:
     // Allow some extra space in case the redirect URL is at the very end of our buffer
     buf = malloc(size + 16);
     if (buf == NULL) {
-        fprintf(stderr, "Cannot allocate buffer\n");
+        perr("Cannot allocate buffer\n");
         goto out;
     }
-    int rsize = _read(fd, buf, size);
+    rsize = _read(fd, buf, size);
     if (rsize != size) {
-        fprintf(stderr, "Cannot read from '%s'\n", zrif_uri);
+        perr("Cannot read from '%s'\n", zrif_uri);
         goto out;
     }
     buf[size] = 0;
@@ -257,29 +399,42 @@ redirect:
             goto redirect;
         }
     }
-
-    printf("Download complete.\n");
     _close(fd);
-    fd = _open(db_path, _O_RDONLY | _O_BINARY);
+    if (is_url)
+        printf("Download complete.\n");
+
+    fd = _open(db_path, _O_RDONLY);
     if (fd > 0) {
-        _close(fd);
+        if (_lseek(fd, 0, SEEK_END) == 0) {
+            printf("Removing stale database '%s'...\n", db_path);
+            _close(fd);
+            remove(db_path);
+            initialize_db = true;
+        } else {
+            _close(fd);
+        }
         fd = 0;
     } else {
-        created_db = 1;
-        if (create_db(db_path) != SQLITE_OK) {
-            fprintf(stderr, "Cannot create database '%s'\n", db_path);
+        initialize_db = true;
+    }
+
+    rc = sqlite3_open_v2(db_path, &db, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE, NULL);
+    if (rc != SQLITE_OK) {
+        perr("Cannot open database '%s'\n", db_path);
+        goto out;
+    }
+
+    if (initialize_db) {
+        rc = sqlite3_exec(db, schema, NULL, NULL, NULL);
+        if (rc != SQLITE_OK) {
+            perr("Cannot set database schema\n");
             goto out;
         }
     }
 
-    rc = sqlite3_open_v2(db_path, &db, SQLITE_OPEN_READWRITE, NULL);
-    if (fd != SQLITE_OK) {
-        fprintf(stderr, "Cannot open database '%s'\n", db_path);
-        goto out;
-    }
     rc = sqlite3_exec(db, "BEGIN TRANSACTION", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "Cannot create transaction: %s\n", errmsg);
+        perr("Cannot create transaction: %s\n", errmsg);
         goto out;
     }
 
@@ -304,14 +459,14 @@ redirect:
                 if (rc == SQLITE_CONSTRAINT) {
                     duplicate++;
                 } else {
-                    fprintf(stderr, "Cannot add %s from zRIF %s: %s\n", content_id, zrif, sqlite3_errmsg(db));
+                    perr("Cannot add %s from zRIF %s: %s\n", content_id, zrif, sqlite3_errmsg(db));
                     failed++;
                 }
             } else {
                 added++;
             }
         } else {
-            fprintf(stderr, "Cannot decode zRIF: %s\n", zrif);
+            perr("Cannot decode zRIF: %s\n", zrif);
             failed++;
         }
         zrif += zrif_len + 1;
@@ -319,28 +474,41 @@ redirect:
 
     rc = sqlite3_exec(db, "COMMIT", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "Cannot commit transaction: %s\n", errmsg);
+        perr("Cannot commit transaction: %s\n", errmsg);
         goto out;
     }
 
     printf("\nProcessed %d license(s): %d added, %d duplicate(s), %d failed.\n", processed, added, duplicate, failed);
-    printf("Database '%s' was successfully %s.\n", db_path, created_db ? "created" : "updated");
+    printf("Database '%s' was successfully %s.\n", db_path, initialize_db ? "created" : "updated");
     ret = 0;
 
 out:
     remove(zrif_tmp);
-    remove(vbs_tmp);
     if (errmsg != NULL)
         sqlite3_free(errmsg);
     sqlite3_close(db);
     free(buf);
     if (fd > 0)
         _close(fd);
+
+#if defined(__vita__)
+    sqlite3_rw_exit();
+    console_set_color(CYAN);
+    if (needs_keypress) {
+        printf("\nPress X to exit.\n");
+        do {
+            sceCtrlPeekBufferPositive(0, &pad, 1);
+        } while (!(pad.buttons & SCE_CTRL_CROSS));
+    }
+    console_exit();
+    end_video();
+    sceKernelExitProcess(0);
+#else
     if (needs_keypress) {
         printf("\nPress any key to exit...\n");
         fflush(stdout);
         getchar();
     }
-
+#endif
     return ret;
 }
