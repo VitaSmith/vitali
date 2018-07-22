@@ -43,7 +43,10 @@ void console_putc(char c)
 	int mtx_err = sceKernelTryLockMutex(console_mtx, 1);
 
 	int last_y = cns_y;
-	if (c == '\n') {
+	if (c == '\r') {
+		draw_rectangle(0, cns_y, SCREEN_W, 20, BLACK);
+		cns_x = 10;
+	} else if (c == '\n') {
 		cns_y += 20;
 		cns_x = 10;
 	} else if (c == '\t') {

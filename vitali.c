@@ -49,7 +49,7 @@
 #define VERSION "1.3"
 #define MAX_QUERY_LENGTH 128
 #if defined(__vita__)
-#define ZRIF_URI "ux0:data/sharedStrings.xml"
+#define ZRIF_URI "ux0:data/NoPayStation v2.5.xlsx"
 #else
 #define ZRIF_URI "https://nopaystation.com/database"
 #endif
@@ -57,6 +57,7 @@
 #if defined(__vita__)
 #define ZRIF_TMP_PATH       "ux0:data/zrif.tmp"
 #define LICENSE_DB_PATH     "ux0:data/license.db"
+#define PROGRESS_STEP       10
 #undef  SEEK_SET
 #undef  SEEK_CUR
 #undef  SEEK_END
@@ -73,6 +74,7 @@
 #else
 #define ZRIF_TMP_PATH       "zrif.tmp"
 #define LICENSE_DB_PATH     "license.db"
+#define PROGRESS_STEP       100
 #define perr(...)           fprintf(stderr, __VA_ARGS__)
 #if defined(_WIN32) || defined(__CYGWIN__)
 #define USE_VBSCRIPT_DOWNLOAD true
@@ -80,6 +82,8 @@
 #define USE_VBSCRIPT_DOWNLOAD false
 #endif
 #endif
+
+#define safe_close(fd)      if (fd > 0) { _close(fd); fd = 0; }
 
 static const char* zrif_charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/+=";
 static const char* schema =             \
@@ -127,6 +131,7 @@ static char* unzip_xlsx(const char* in_buf, long in_size, long* out_size)
     const char* shared_strings = "xl/sharedStrings.xml";
     size_t shared_strings_len = strlen(shared_strings);
     char *pos, *out_buf = NULL;
+    uint8_t* p;
     size_t compressed_size = 0, uncompressed_size = 0;
 
     pos = (char*) in_buf;
@@ -141,8 +146,11 @@ static char* unzip_xlsx(const char* in_buf, long in_size, long* out_size)
             pos += 0x24;
             continue;
         }
-        compressed_size = (size_t) ((uint32_t*)pos)[5];
-        uncompressed_size = (size_t) ((uint32_t*)pos)[6];
+        // Vita doesn't seem to like casting to (uint32_t*)
+        p = (uint8_t*)&pos[20];
+        compressed_size = p[0] + (p[1] << 8) + (p[2] << 16) + (p[3] << 24);
+        p = (uint8_t*)&pos[24];
+        uncompressed_size = p[0] + (p[1] << 8) + (p[2] << 16) + (p[3] << 24);
         break;
     }
     if (compressed_size == 0) {
@@ -327,7 +335,7 @@ int main(int argc, char** argv)
     for (int i = 1; i < argc; i++) {
         if ((strcmp(argv[i], "-v") == 0) || (strcmp(argv[i], "--version") == 0)) {
             printf("Vitali - Vita License database updater, v" VERSION "\n");
-            printf("Copyright(c) 2017-2018 - VitaSmith\n");
+            printf("Copyright (c) 2017-2018 - VitaSmith (GPLv3)\n");
             printf("Visit https://github.com/VitaSmith/vitali for license details and source\n");
             goto out;
         }
@@ -340,6 +348,9 @@ int main(int argc, char** argv)
         else if (i == 2)
             db_path = argv[i];
     }
+
+    printf("Vitali v" VERSION "\n");
+    printf("Copyright (c) 2017-2018 VitaSmith (GPLv3)\n\n");
 
 redirect:
     is_url = (strncmp(zrif_uri, "http", 4) == 0);
@@ -381,6 +392,7 @@ redirect:
 
     if ((buf[0] == 'P') && (buf[1] == 'K')) {
         /* Assume that we are dealing with a .xlsx file */
+        printf("Parsing XLSX file...\n");
         char* new_buf = unzip_xlsx(buf, size, &size);
         if (new_buf == NULL)
             goto out;
@@ -393,27 +405,24 @@ redirect:
             p = strstr(p, "/edit'");
         }
         if (p != NULL) {
-            _close(fd);
+            safe_close(fd);
             remove(zrif_tmp);
             strcpy(p, "/export?format=xlsx");
             goto redirect;
         }
     }
-    _close(fd);
-    if (is_url)
-        printf("Download complete.\n");
+    safe_close(fd);
 
     fd = _open(db_path, _O_RDONLY);
     if (fd > 0) {
         if (_lseek(fd, 0, SEEK_END) == 0) {
             printf("Removing stale database '%s'...\n", db_path);
-            _close(fd);
+            safe_close(fd);
             remove(db_path);
             initialize_db = true;
         } else {
-            _close(fd);
+            safe_close(fd);
         }
-        fd = 0;
     } else {
         initialize_db = true;
     }
@@ -445,6 +454,8 @@ redirect:
             continue;
         }
         processed++;
+        if (processed % PROGRESS_STEP == 0)
+            printf("\rProcessed %d licenses", processed);
         zrif_len = strspn(zrif, zrif_charset);
         zrif[zrif_len] = 0;
         rif_len = decode_zrif(zrif, rif, sizeof(rif));
@@ -459,14 +470,14 @@ redirect:
                 if (rc == SQLITE_CONSTRAINT) {
                     duplicate++;
                 } else {
-                    perr("Cannot add %s from zRIF %s: %s\n", content_id, zrif, sqlite3_errmsg(db));
+                    perr("\nCannot add %s from zRIF %s: %s\n", content_id, zrif, sqlite3_errmsg(db));
                     failed++;
                 }
             } else {
                 added++;
             }
         } else {
-            perr("Cannot decode zRIF: %s\n", zrif);
+            perr("\nCannot decode zRIF: %s\n", zrif);
             failed++;
         }
         zrif += zrif_len + 1;
@@ -474,11 +485,11 @@ redirect:
 
     rc = sqlite3_exec(db, "COMMIT", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        perr("Cannot commit transaction: %s\n", errmsg);
+        perr("\nCannot commit transaction: %s\n", errmsg);
         goto out;
     }
 
-    printf("\nProcessed %d license(s): %d added, %d duplicate(s), %d failed.\n", processed, added, duplicate, failed);
+    printf("\rProcessed %d licenses:\n %d added, %d duplicate(s), %d failed.\n", processed, added, duplicate, failed);
     printf("Database '%s' was successfully %s.\n", db_path, initialize_db ? "created" : "updated");
     ret = 0;
 
@@ -488,8 +499,7 @@ out:
         sqlite3_free(errmsg);
     sqlite3_close(db);
     free(buf);
-    if (fd > 0)
-        _close(fd);
+    safe_close(fd);
 
 #if defined(__vita__)
     sqlite3_rw_exit();
