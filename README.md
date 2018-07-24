@@ -14,8 +14,8 @@ Compilation
 -----------
 
 Either use `build.cmd` or the `.sln` file if you are on Windows and have
-Visual Studio 2017 installed, or `make` on Linux, Windows/MinGW and other
-platforms.
+Visual Studio 2017 installed, or `make` on Linux, Windows/MinGW, or 
+`make -f Makefile.vita` for the Vita version.
 
 Usage
 -----

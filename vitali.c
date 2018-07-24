@@ -24,11 +24,12 @@
 #include <string.h>
 #if !defined(__vita__)
 #include <fcntl.h>
-#include <io.h>
 #if defined(_WIN32) || defined(__CYGWIN__)
+#include <io.h>
 #include <windows.h>
 #endif
 #else
+#include <curl/curl.h>
 #include <psp2/ctrl.h>
 #include <psp2/sqlite.h>
 #include <psp2/display.h>
@@ -39,6 +40,7 @@
 #include <psp2/net/net.h>
 #include <psp2/net/netctl.h>
 #include <psp2/net/http.h>
+#include <psp2/rtc.h> 
 #include "console.h"
 #endif
 
@@ -46,18 +48,45 @@
 #include "zrif.h"
 #include "puff.h"
 
-#define VERSION "1.3"
-#define MAX_QUERY_LENGTH 128
-#if defined(__vita__)
-#define ZRIF_URI "ux0:data/NoPayStation v2.5.xlsx"
-#else
-#define ZRIF_URI "https://nopaystation.com/database"
+#if defined(_WIN32)
+#define msleep(msecs) Sleep(msecs)
+static __inline uint64_t utime(void) {
+    uint64_t ut;
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    ut = ft.dwHighDateTime;
+    ut <<= 32;
+    ut |= ft.dwLowDateTime;
+    return (ut / 10) - 11644473600000000ULL;
+}
+#elif defined(__vita__)
+#include <psp2/kernel/threadmgr.h>
+#define msleep(msecs) sceKernelDelayThread(1000*msecs)
+static inline uint64_t utime(void) {
+    SceRtcTick ut;
+    sceRtcGetCurrentTick(&ut);
+    return ut.tick;
+}
+#elif defined(__CYGWIN__) || defined(__linux__) || defined(__APPLE__)
+#include <unistd.h>
+#include <time.h>
+#include <sys/time.h>
+#define msleep(msecs) usleep(1000*msecs)
+static inline uint64_t utime(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec * 1000000ULL + tv.tv_usec;
+}
 #endif
+
+#define VERSION             "1.4"
+#define MAX_QUERY_LENGTH    128
+#define ZRIF_URI            "https://nopaystation.com/database/"
+#define REFRESH_STEP        100000ULL
 
 #if defined(__vita__)
 #define ZRIF_TMP_PATH       "ux0:data/zrif.tmp"
 #define LICENSE_DB_PATH     "ux0:data/license.db"
-#define PROGRESS_STEP       10
 #undef  SEEK_SET
 #undef  SEEK_CUR
 #undef  SEEK_END
@@ -74,12 +103,17 @@
 #else
 #define ZRIF_TMP_PATH       "zrif.tmp"
 #define LICENSE_DB_PATH     "license.db"
-#define PROGRESS_STEP       100
 #define perr(...)           fprintf(stderr, __VA_ARGS__)
 #if defined(_WIN32) || defined(__CYGWIN__)
 #define USE_VBSCRIPT_DOWNLOAD true
 #else
 #define USE_VBSCRIPT_DOWNLOAD false
+#define _open               open
+#define _lseek              lseek
+#define _read               read
+#define _close              close
+#define _O_RDONLY           O_RDONLY
+#define _O_BINARY           0
 #endif
 #endif
 
@@ -146,7 +180,7 @@ static char* unzip_xlsx(const char* in_buf, long in_size, long* out_size)
             pos += 0x24;
             continue;
         }
-        // Vita doesn't seem to like casting to (uint32_t*)
+        /* Vita doesn't seem to like casting to (uint32_t*) */
         p = (uint8_t*)&pos[20];
         compressed_size = p[0] + (p[1] << 8) + (p[2] << 16) + (p[3] << 24);
         p = (uint8_t*)&pos[24];
@@ -186,97 +220,125 @@ out:
 }
 
 #if defined(__vita__)
-void http_init()
+static char* size_to_human_readable(uint64_t size)
 {
-    const int size = 1 * 1024 * 1024;
+    const char *suffix_table[] = { "KB", "MB", "GB", "PB" };
+    static char str_size[32];
+    double hr_size = (double)size;
+    const double divider = 1024.0;
+    int suffix;
+
+    for (suffix = 0; suffix < 3; suffix++) {
+        if (hr_size < divider)
+            break;
+        hr_size /= divider;
+    }
+    if (suffix == 0) {
+        sprintf(str_size, "%d bytes", (int)hr_size);
+    } else {
+        sprintf(str_size, "%0.2f %s", hr_size, suffix_table[suffix - 1]);
+    }
+    return str_size;
+}
+
+static void http_init()
+{
+    const int size = 4 * 1024 * 1024;
     sceSysmoduleLoadModule(SCE_SYSMODULE_NET);
+    sceSysmoduleLoadModule(SCE_SYSMODULE_HTTP);
     SceNetInitParam netInitParam;
     netInitParam.memory = malloc(size);
     netInitParam.size = size;
     netInitParam.flags = 0;
     sceNetInit(&netInitParam);
     sceNetCtlInit();
-    sceSysmoduleLoadModule(SCE_SYSMODULE_HTTP);
     sceHttpInit(size);
 }
 
-void http_exit()
+static void http_exit()
 {
     sceHttpTerm();
-    sceSysmoduleUnloadModule(SCE_SYSMODULE_HTTP);
     sceNetCtlTerm();
     sceNetTerm();
+    sceSysmoduleUnloadModule(SCE_SYSMODULE_HTTP);
     sceSysmoduleUnloadModule(SCE_SYSMODULE_NET);
+}
+
+static int curl_progress_function(void *p, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow)
+{
+    static uint64_t last_tick = 0ULL;
+    uint64_t cur_tick;
+
+    /* Ensure that at least 200 ms have elapsed since last progress */
+    cur_tick = utime();
+    if (cur_tick - last_tick < REFRESH_STEP)
+        return 0;
+    last_tick = cur_tick;
+    printf("\rDownloaded %s", size_to_human_readable(dlnow));
+    return 0;
+}
+
+static size_t curl_write_function(void *ptr, size_t size, size_t nmemb, void *stream)
+{
+    int written = sceIoWrite(*(int*)stream, ptr, size * nmemb);
+    if (written < 0) {
+        perr("Error writing file: 0x%08X\n", (uint32_t)written);
+        return 0;
+    }
+    return (size_t)written;
 }
 
 static bool download_file(const char *url, const char *dest)
 {
-    bool ret = false;
-    unsigned char buffer[16 * 1024];
-    int template = 0, connection = 0, request = 0, handle = 0, fd = 0, read, written;
+    int fd = 0, http_status = 0;
+    CURL *curl = NULL;
+    CURLcode r = CURLE_RECV_ERROR;
 
-    printf("Downloading '%s'...\n", url);
     http_init();
 
-    printf("sceHttpCreateTemplate()...\n");
-    template = sceHttpCreateTemplate("PS Vita Vitali App", 1, 1);
-    if (template < 0) {
-        perr("sceHttpCreateTemplate() error: 0x%08X\n", (uint32_t)template);
+    printf("Downloading '%s'...\n", url);
+
+    curl = curl_easy_init();
+    if (curl == NULL) {
+        perr("Could not open initialize download\n");
         goto out;
     }
 
-    printf("sceHttpCreateConnectionWithURL()...\n");
-    connection = sceHttpCreateConnectionWithURL(template, url, 0);
-    if (connection < 0) {
-        perr("sceHttpCreateConnectionWithURL() error: 0x%08X\n", (uint32_t)connection);
-        goto out;
-    }
+    curl_easy_setopt(curl, CURLOPT_URL, url);
 
-    printf("sceHttpCreateRequestWithURL()...\n");
-    request = sceHttpCreateRequestWithURL(connection, SCE_HTTP_METHOD_GET, url, 0);
-    if (request < 0) {
-        perr("sceHttpCreateRequestWithURL() error: 0x%08X\n", (uint32_t)request);
-        goto out;
-    }
-
-    printf("sceHttpSendRequest()...\n");
-    handle = sceHttpSendRequest(request, NULL, 0);
-    if (handle < 0) {
-        perr("sceHttpSendRequest() error: 0x%08X\n", (uint32_t)handle);
-        goto out;
-    }
-
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "Vitali/" VERSION " (libcur/" LIBCURL_VERSION ")");
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    /* We need TLS 1.2 support for nopaystation.com */
+    curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 20L);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_function);
+    /* Set Curl to display some progress */
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curl_progress_function);
     fd = sceIoOpen(dest, SCE_O_WRONLY | SCE_O_CREAT, 0777);
     if (fd < 0) {
         perr("Could not open file '%s'\n", dest);
         goto out;
     }
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &fd);
 
-    printf("sceHttpReadData()...\n");
-    while ((read = sceHttpReadData(request, &buffer, sizeof(buffer))) > 0) {
-        written = sceIoWrite(fd, buffer, read);
-        if (written <= 0) {
-            perr("Error writing file: 0x%08X\n", (uint32_t)written);
-            goto out;
-        }
-    }
-    if (read < 0) {
-        perr("Error downloading file: 0x%08X\n", (uint32_t)read);
+    r = curl_easy_perform(curl);
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
+    if (r != CURLE_OK) {
+        perr("Could not download file: %s\n", curl_easy_strerror(r));
         goto out;
     }
-    ret = true;
+    printf("\n");
 
 out:
-    if (request > 0)
-        sceHttpDeleteRequest(request);
-    if (connection > 0)
-        sceHttpDeleteConnection(connection);
-    if (template > 0)
-        sceHttpDeleteTemplate(template);
-    if (fd >0)
+    if (fd > 0)
         sceIoClose(fd);
+    if (curl != NULL)
+        curl_easy_cleanup(curl);
     http_exit();
-    return ret;
+    return (r == CURLE_OK);
 }
 #else
 static bool download_file(const char* url, const char* file)
@@ -320,6 +382,7 @@ int main(int argc, char** argv)
     char *buf = NULL, *zrif = NULL;
     char query[MAX_QUERY_LENGTH];
     uint8_t rif[1024];
+    uint64_t last_tick = 0, cur_tick;
     size_t rif_len, zrif_len;
     sqlite3 *db = NULL;
     sqlite3_stmt *stmt;
@@ -376,7 +439,7 @@ redirect:
     _lseek(fd, 0, SEEK_SET);
 
     free(buf);
-    // Allow some extra space in case the redirect URL is at the very end of our buffer
+    /* Allow some extra space in case the redirect URL is at the very end of our buffer */
     buf = malloc(size + 16);
     if (buf == NULL) {
         perr("Cannot allocate buffer\n");
@@ -398,6 +461,13 @@ redirect:
             goto out;
         free(buf);
         buf = new_buf;
+    } else if (strstr(buf, "<title>Too Many Requests</title>") != NULL) {
+        /* Google spreadsheet may return a "Too Many Requests page */
+        safe_close(fd);
+        remove(zrif_tmp);
+        printf("Too many requests - Retrying in 5 seconds...\n");
+        msleep(5000);
+        goto redirect;
     } else {
         char* p = strstr(buf, "https://docs.google.com/spreadsheets");
         if (p != NULL) {
@@ -454,8 +524,11 @@ redirect:
             continue;
         }
         processed++;
-        if (processed % PROGRESS_STEP == 0)
+        cur_tick = utime();
+        if (cur_tick - last_tick >= REFRESH_STEP) {
+            last_tick = cur_tick;
             printf("\rProcessed %d licenses", processed);
+        }
         zrif_len = strspn(zrif, zrif_charset);
         zrif[zrif_len] = 0;
         rif_len = decode_zrif(zrif, rif, sizeof(rif));
