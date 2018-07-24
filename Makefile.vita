@@ -23,9 +23,10 @@ debug: all
 	vita-pack-vpk -s param.sfo -b eboot.bin $@
 
 eboot.bin: $(TARGET).velf
-	vita-make-fself -s $< $@
+	vita-make-fself -c $< $@
 
 %.velf: %.elf
+	arm-vita-eabi-strip -g $<
 	vita-elf-create $< $@
 
 $(TARGET).elf: $(OBJS)

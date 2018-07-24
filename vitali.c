@@ -79,14 +79,15 @@ static inline uint64_t utime(void) {
 }
 #endif
 
-#define VERSION             "1.4"
+#define VERSION             "1.3"
 #define MAX_QUERY_LENGTH    128
 #define ZRIF_URI            "https://nopaystation.com/database/"
 #define REFRESH_STEP        100000ULL
 
 #if defined(__vita__)
-#define ZRIF_TMP_PATH       "ux0:data/zrif.tmp"
-#define LICENSE_DB_PATH     "ux0:data/license.db"
+#define ZRIF_TMP_PATH       "ux0:data/vitali.tmp"
+#define LICENSE_DB_PATH     "ux0:license/license.db"
+#define SHORTEN_SIZE        41
 #undef  SEEK_SET
 #undef  SEEK_CUR
 #undef  SEEK_END
@@ -101,8 +102,9 @@ static inline uint64_t utime(void) {
 #define _O_BINARY           0
 #define perr(...)           printf(__VA_ARGS__)
 #else
-#define ZRIF_TMP_PATH       "zrif.tmp"
+#define ZRIF_TMP_PATH       "vitali.tmp"
 #define LICENSE_DB_PATH     "license.db"
+#define SHORTEN_SIZE        62
 #define perr(...)           fprintf(stderr, __VA_ARGS__)
 #if defined(_WIN32) || defined(__CYGWIN__)
 #define USE_VBSCRIPT_DOWNLOAD true
@@ -158,6 +160,26 @@ static bool separate_console()
 #else
     return false;
 #endif
+}
+
+/* Custom shortening of URIs */
+static char* shorten_uri(const char* uri, size_t max_size)
+{
+    size_t i, j;
+    static char str[128];
+    if ((max_size > strlen(uri)) || (max_size > sizeof(str) - 1))
+        return (char*)uri;
+    /* Shorten after the 3rd slash */
+    for (i = 0, j = 0; (i < strlen(uri)) && (j < 3); i++) {
+        if (uri[i] == '/')
+            j++;
+    }
+    if ((i >= strlen(uri)) || (i >= max_size))
+        return (char*)uri;
+    strncpy(str, uri, i);
+    strcat(str, "...");
+    strcat(str, &uri[strlen(uri) - max_size + strlen(str)]);
+    return str;
 }
 
 static char* unzip_xlsx(const char* in_buf, long in_size, long* out_size)
@@ -296,7 +318,7 @@ static bool download_file(const char *url, const char *dest)
 
     http_init();
 
-    printf("Downloading '%s'...\n", url);
+    printf("Downloading '%s'...\n", shorten_uri(url, SHORTEN_SIZE));
 
     curl = curl_easy_init();
     if (curl == NULL) {
@@ -346,6 +368,7 @@ static bool download_file(const char* url, const char* file)
     bool use_vbscript = USE_VBSCRIPT_DOWNLOAD;
     char *vbs_tmp = "download.vbs";
     char cmd[1024];
+
     if (use_vbscript) {
         FILE *vbs_fd = fopen(vbs_tmp, "w");
         if (vbs_fd != NULL) {
@@ -353,7 +376,9 @@ static bool download_file(const char* url, const char* file)
             fclose(vbs_fd);
         }
     }
-    printf("Downloading '%s'...\n", url);
+
+    printf("Downloading '%s'...\n", shorten_uri(url, SHORTEN_SIZE));
+
     fflush(stdout);
     if (use_vbscript)
         snprintf(cmd, sizeof(cmd), "cscript //nologo %s %s %s", vbs_tmp, url, file);
@@ -395,15 +420,16 @@ int main(int argc, char** argv)
     sqlite3_rw_init();
 #endif
 
+    printf("Vitali v" VERSION " - Vita License database updater\n");
+    printf("Copyright (c) 2017-2018 VitaSmith (GPLv3)\n\n");
+
     for (int i = 1; i < argc; i++) {
         if ((strcmp(argv[i], "-v") == 0) || (strcmp(argv[i], "--version") == 0)) {
-            printf("Vitali - Vita License database updater, v" VERSION "\n");
-            printf("Copyright (c) 2017-2018 - VitaSmith (GPLv3)\n");
-            printf("Visit https://github.com/VitaSmith/vitali for license details and source\n");
+            printf("\nVisit https://github.com/VitaSmith/vitali for the source\n");
             goto out;
         }
         if ((strcmp(argv[i], "-h") == 0) || (strcmp(argv[i], "--help") == 0)) {
-            printf("Usage: vitali [ZRIF_URI] [DB_FILE]\n");
+            printf("\nUsage: vitali [ZRIF_URI] [DB_FILE]\n");
             goto out;
         }
         if (i == 1)
@@ -412,10 +438,8 @@ int main(int argc, char** argv)
             db_path = argv[i];
     }
 
-    printf("Vitali v" VERSION "\n");
-    printf("Copyright (c) 2017-2018 VitaSmith (GPLv3)\n\n");
 
-redirect:
+retry:
     is_url = (strncmp(zrif_uri, "http", 4) == 0);
     if (is_url) {
         if (download_file(zrif_uri, zrif_tmp))
@@ -467,7 +491,7 @@ redirect:
         remove(zrif_tmp);
         printf("Too many requests - Retrying in 5 seconds...\n");
         msleep(5000);
-        goto redirect;
+        goto retry;
     } else {
         char* p = strstr(buf, "https://docs.google.com/spreadsheets");
         if (p != NULL) {
@@ -478,7 +502,7 @@ redirect:
             safe_close(fd);
             remove(zrif_tmp);
             strcpy(p, "/export?format=xlsx");
-            goto redirect;
+            goto retry;
         }
     }
     safe_close(fd);
@@ -550,7 +574,9 @@ redirect:
                 added++;
             }
         } else {
+#if !defined(__vita__)
             perr("\nCannot decode zRIF: %s\n", zrif);
+#endif
             failed++;
         }
         zrif += zrif_len + 1;
