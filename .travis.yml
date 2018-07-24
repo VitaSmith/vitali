@@ -1,0 +1,29 @@
+os: linux
+language: c
+dist: trusty
+sudo: false
+
+install:
+  - cd ${TRAVIS_BUILD_DIR}
+  - curl -L "https://github.com/vitasdk/autobuilds/releases/download/master-linux-v826/vitasdk-x86_64-linux-gnu-2018-07-24_08-31-56.tar.bz2" | tar xj
+  - git clone https://github.com/VitaSmith/libsqlite.git
+  - for name in curl openssl zlib; do curl -L "http://dl.vitasdk.org/${name}.tar.xz" | tar -xJC vitasdk/arm-vita-eabi; done
+
+script:
+  - export VITASDK=${TRAVIS_BUILD_DIR}/vitasdk
+  - export PATH=${VITASDK}/bin:${PATH}
+  - cd ${TRAVIS_BUILD_DIR}/libsqlite/libsqlite
+  - make install
+  - cd ${TRAVIS_BUILD_DIR}
+  - make -f Makefile.vita
+
+deploy:
+  provider: releases
+  api_key:
+    secure: BgaUUk88zSh/GNMiDrIrfJNdK0Nkzrw5cur9scduAc5uViE064eUh1t+VoZ711Hth2jKUAWM94iVZ2eggkG0kcWA1dDjiPaHcwqYxWypJUGxacL20mFu5feUYo1vShEkbumVY8x6AC0GrPbLhx7cHmcIAkdaSGL+hqDqXmoNJ0QiMdMYGNyI7J2bpe+1axUiAvlZhMjsO8ig8jJyd6vtOcCJE9ZsT2696MIz+PLG40Gg5Qv3tPT5VpVtiRK8+Y6czrFnHopDGW9S6QpmuySedrgeV49nkVmNaj8sA8l+gFbrfe7PPNqmHhNYEisz77whJ0RlKIGjnCpBje3ZYPlEbpdS6ClqQ5lEIuNLMSExEWqyJRyfv84Zu0PuwJaE6O8qgIU3weHkHq+qmEhRYv+dHVfG2rTsQl1pIAkIdASZMjLifwagRzrYwBJSSF5TMzawQn4tciSfD+d057aHGalrTQZlOXK3jXUIcYAIzTReytRsXAgvBZZeIbYdg7vExvwAUhtnngjW2Hf4tsuNlASXEMXK+3RT2wpnjIq4J+DSyyaJlidIIFsBF4Yq8tzella+JjFGegKSQTT2qiJojKdZ4L6204QLHGrVf3jd0p/AgmK1WX5t7YPfU+LeTuMGXBPpFtrmoErPDShRKVtVE9KGIo1QTEoYhWy4QUthHMVvBz4=
+  file:
+    - vitali.elf
+    - vitali.vpk
+  skip_cleanup: true
+  on:
+    tags: true

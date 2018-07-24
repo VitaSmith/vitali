@@ -24,7 +24,7 @@ Usage
 
 If no parameter is provided, Vitali tries to download the latest zRIF data
 from the internet, and create/update a `license.db` file in the current
-directory.
+directory (or in `ux0:license/license.db` if using the Vita version).
 
 If a single parameter is provided, Vitali uses it as the source of the zRIF
 data. It can be either a local file or a URL.
